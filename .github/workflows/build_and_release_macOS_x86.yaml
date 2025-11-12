@@ -36,7 +36,7 @@ jobs:
       download-link: ${{ needs.fetch-aseprite-info.outputs.download-link }}
       release-tag: ${{ needs.fetch-aseprite-info.outputs.release-tag }}
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
       - uses: ncipollo/release-action@v1
         with:
           tag: ${{ needs.fetch-aseprite-info.outputs.release-tag }}
@@ -55,61 +55,77 @@ jobs:
           os: [ windows-latest ]
         fail-fast: false
     steps:
-      - name: Install Dependencies
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y \
-            libpixman-1-dev libfreetype6-dev libharfbuzz-dev zlib1g-dev \
-            libx11-dev libxcursor-dev libxi-dev libgl1-mesa-dev libfontconfig1-dev
-      - uses: actions/checkout@v4
-      - name: Install Aseprite
-        shell: bash
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Visual Studio environment
+        uses: seanmiddleditch/gha-setup-vsdevenv@master
+        with:
+          arch: amd64
+          winsdk: 10.0.26100.0
+          components: Microsoft.VisualStudio.Component.VC.Tools.x86.x64;Microsoft.VisualStudio.Component.Windows10SDK.19041
+
+      - name: Install Ninja
+        uses: aseprite/get-ninja@main
+
+      - name: Install Aseprite source
+        shell: pwsh
         run: |
           git clone --recurse-submodules -j8 https://github.com/aseprite/aseprite --branch ${{ needs.create-release.outputs.release-tag }}
+          cd aseprite
+          git submodule update --init --recursive
+
       - name: Install Skia
         working-directory: aseprite
-        shell: bash
+        shell: pwsh
         run: |
-          wget https://github.com/aseprite/skia/releases/download/m124-08a5439a6b/Skia-macOS-Release-x64.zip
-          unzip Skia-macOS-Release-x64.zip -d skia
-      - uses: aseprite/get-ninja@main
+          Invoke-WebRequest -Uri "https://github.com/aseprite/skia/releases/download/m124-08a5439a6b/Skia-Windows-Release-x64.zip" -OutFile "Skia-Windows-Release-x64.zip"
+          Expand-Archive -Path "Skia-Windows-Release-x64.zip" -DestinationPath "skia" -Force
+
       - name: Generating Makefiles
-        shell: bash
+        shell: pwsh
         working-directory: aseprite
         run: |
-          export enable_ccache=off
-          export laf_backend=skia
-          export enable_scripting=on
+          $env:enable_ccache = "off"
+          $env:laf_backend = "skia"
+          $env:enable_scripting = "on"
+          $env:skia_arch = "x64"
+          
+          cmake -S . -B build -G Ninja `
+            -DCMAKE_BUILD_TYPE="${{ env.BUILD_TYPE }}" `
+            -DENABLE_TESTS=OFF `
+            -DENABLE_SCRIPTING="$env:enable_scripting" `
+            -DENABLE_CCACHE="$env:enable_ccache" `
+            -DLAF_BACKEND="$env:laf_backend" `
+            -DSKIA_DIR="$((Get-Location).Path)\skia" `
+            -DSKIA_LIBRARY_DIR="$((Get-Location).Path)\skia\out\Release-x64" `
+            -DOPENSSL_USE_STATIC_LIBS=ON
 
-          export skia_arch=x64
-
-          cmake -S . -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=10.9 \
-            -DENABLE_TESTS=OFF \
-            -DENABLE_SCRIPTING=$enable_scripting \
-            -DENABLE_CCACHE=$enable_ccache \
-            -DLAF_BACKEND=$laf_backend \
-            -DSKIA_DIR=$(realpath skia) \
-            -DOPENSSL_USE_STATIC_LIBS=ON \
-            -DSKIA_LIBRARY_DIR=$(realpath skia/out/Release-$skia_arch)
       - name: Compiling
-        shell: bash
+        shell: pwsh
         working-directory: aseprite
         run: |
-          cd build && ninja
+          cd build
+          ninja
+
       - name: Clean Up Build folder
         working-directory: aseprite/build/bin
-        shell: bash
-        run: find . -mindepth 1 ! \( -name 'aseprite' -o -name 'aseprite.exe' -o -name 'data' -prune \) -exec rm -rf {} +
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path . -Recurse | Where-Object { $_.Name -notin @('aseprite.exe', 'data') } | Remove-Item -Recurse -Force
+
       - name: Make portable zip
         working-directory: aseprite/build/bin
-        run: echo '# This file is here so Aseprite behaves as a portable program' > aseprite.ini
-      - name: Create release
+        shell: pwsh
+        run: |
+          "This file is here so Aseprite behaves as a portable program" | Out-File -FilePath "aseprite.ini" -Encoding utf8
+
+      - name: Create release zip
         working-directory: aseprite/build/bin
-        run: 7z -tzip a Aseprite-${{ needs.create-release.outputs.release-tag }}-${{ runner.os }}.zip *
+        shell: pwsh
+        run: |
+          Compress-Archive -Path * -DestinationPath "Aseprite-${{ needs.create-release.outputs.release-tag }}-${{ runner.os }}.zip" -Force
+
       - name: Upload release
         uses: svenstaro/upload-release-action@v2
         with:
