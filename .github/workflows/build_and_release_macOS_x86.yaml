@@ -60,7 +60,10 @@ jobs:
       - name: Setup Visual Studio environment manually
         shell: pwsh
         run: |
+          Write-Host "=== Starting Visual Studio environment setup ===" -ForegroundColor Cyan
+          
           # Find Visual Studio installation path using vswhere
+          Write-Host "Searching for Visual Studio installation..."
           $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
             -latest `
             -products * `
@@ -68,26 +71,28 @@ jobs:
             -property installationPath
           
           if (-not $vsPath) {
-            Write-Error "Visual Studio installation not found"
+            Write-Error "ERROR: Visual Studio installation not found"
             exit 1
           }
           
-          Write-Host "Found Visual Studio at: $vsPath"
+          Write-Host "Found Visual Studio at: $vsPath" -ForegroundColor Green
           
           # Locate vcvars64.bat
           $vcVarsPath = Join-Path $vsPath "VC\Auxiliary\Build\vcvars64.bat"
           
           if (-not (Test-Path $vcVarsPath)) {
-            Write-Error "vcvars64.bat not found at $vcVarsPath"
+            Write-Error "ERROR: vcvars64.bat not found at $vcVarsPath"
             exit 1
           }
           
-          Write-Host "Found vcvars64.bat at: $vcVarsPath"
+          Write-Host "Found vcvars64.bat at: $vcVarsPath" -ForegroundColor Green
           
           # Capture environment variables from vcvars64.bat
+          Write-Host "Capturing environment variables from vcvars64.bat..."
           $envOutput = cmd /c " `"$vcVarsPath`" && set"
           
           # Parse and set environment variables
+          $envCount = 0
           foreach ($line in $envOutput) {
             if ($line -match '^([^=]+)=(.*)$') {
               $key = $matches[1]
@@ -107,37 +112,163 @@ jobs:
                 # Set other environment variables
                 [Environment]::SetEnvironmentVariable($key, $value, 'Process')
               }
+              $envCount++
             }
           }
           
-          Write-Host "Successfully set up Visual Studio environment"
+          Write-Host "Successfully set $envCount environment variables" -ForegroundColor Green
+          Write-Host "=== Visual Studio environment setup completed ===" -ForegroundColor Cyan
 
       - name: Install Ninja
         uses: aseprite/get-ninja@main
 
+      - name: Verify build tools installation
+        shell: pwsh
+        run: |
+          Write-Host "=== Verifying build tools ===" -ForegroundColor Cyan
+          
+          # Check CMake
+          Write-Host "Checking CMake..."
+          try {
+            $cmakeVersion = cmake --version
+            Write-Host "CMake version: $cmakeVersion" -ForegroundColor Green
+          } catch {
+            Write-Error "ERROR: CMake not found"
+            exit 1
+          }
+          
+          # Check Ninja
+          Write-Host "Checking Ninja..."
+          try {
+            $ninjaVersion = ninja --version
+            Write-Host "Ninja version: $ninjaVersion" -ForegroundColor Green
+          } catch {
+            Write-Error "ERROR: Ninja not found"
+            exit 1
+          }
+          
+          # Check MSBuild
+          Write-Host "Checking MSBuild..."
+          try {
+            $msbuildVersion = msbuild -version
+            Write-Host "MSBuild version: $msbuildVersion" -ForegroundColor Green
+          } catch {
+            Write-Error "ERROR: MSBuild not found"
+            exit 1
+          }
+          
+          # Check compiler
+          Write-Host "Checking C++ compiler..."
+          try {
+            $clVersion = cl
+            Write-Host "Compiler found: $clVersion" -ForegroundColor Green
+          } catch {
+            Write-Error "ERROR: C++ compiler not found"
+            exit 1
+          }
+          
+          Write-Host "=== Build tools verification completed ===" -ForegroundColor Cyan
+
       - name: Install Aseprite source
         shell: pwsh
         run: |
-          git clone --recurse-submodules -j8 https://github.com/aseprite/aseprite --branch ${{ needs.create-release.outputs.release-tag }}
+          Write-Host "=== Installing Aseprite source ===" -ForegroundColor Cyan
+          
+          $releaseTag = "${{ needs.create-release.outputs.release-tag }}"
+          Write-Host "Release tag: $releaseTag"
+          
+          if (-not $releaseTag) {
+            Write-Error "ERROR: Release tag not provided"
+            exit 1
+          }
+          
+          Write-Host "Cloning Aseprite repository..."
+          git clone --recurse-submodules -j8 https://github.com/aseprite/aseprite --branch $releaseTag
+          
+          if (-not (Test-Path "aseprite")) {
+            Write-Error "ERROR: Failed to clone Aseprite repository"
+            exit 1
+          }
+          
           cd aseprite
+          Write-Host "Updating submodules..."
           git submodule update --init --recursive
+          
+          Write-Host "Aseprite source directory contents:"
+          Get-ChildItem -Path . -Force | Format-Table Name, Mode
+          
+          Write-Host "=== Aseprite source installation completed ===" -ForegroundColor Cyan
 
       - name: Install Skia
         working-directory: aseprite
         shell: pwsh
         run: |
-          Invoke-WebRequest -Uri "https://github.com/aseprite/skia/releases/download/m124-08a5439a6b/Skia-Windows-Release-x64.zip" -OutFile "Skia-Windows-Release-x64.zip"
-          Expand-Archive -Path "Skia-Windows-Release-x64.zip" -DestinationPath "skia" -Force
+          Write-Host "=== Installing Skia ===" -ForegroundColor Cyan
+          
+          $skiaUrl = "https://github.com/aseprite/skia/releases/download/m124-08a5439a6b/Skia-Windows-Release-x64.zip"
+          $skiaZip = "Skia-Windows-Release-x64.zip"
+          
+          Write-Host "Downloading Skia from: $skiaUrl"
+          Invoke-WebRequest -Uri $skiaUrl -OutFile $skiaZip -UseBasicParsing
+          
+          if (-not (Test-Path $skiaZip)) {
+            Write-Error "ERROR: Failed to download Skia"
+            exit 1
+          }
+          
+          $zipSize = (Get-Item $skiaZip).Length / 1MB
+          Write-Host "Downloaded Skia zip file size: $zipSize MB" -ForegroundColor Green
+          
+          Write-Host "Extracting Skia..."
+          Expand-Archive -Path $skiaZip -DestinationPath "skia" -Force
+          
+          if (-not (Test-Path "skia")) {
+            Write-Error "ERROR: Failed to extract Skia"
+            exit 1
+          }
+          
+          Write-Host "Skia directory contents:"
+          Get-ChildItem -Path skia -Force | Format-Table Name, Mode
+          
+          Write-Host "=== Skia installation completed ===" -ForegroundColor Cyan
 
       - name: Generating Makefiles
         shell: pwsh
         working-directory: aseprite
         run: |
+          Write-Host "=== Generating Makefiles ===" -ForegroundColor Cyan
+          
           $env:enable_ccache = "off"
           $env:laf_backend = "skia"
           $env:enable_scripting = "on"
           $env:skia_arch = "x64"
           
+          Write-Host "Environment variables:"
+          Write-Host "  enable_ccache: $env:enable_ccache"
+          Write-Host "  laf_backend: $env:laf_backend"
+          Write-Host "  enable_scripting: $env:enable_scripting"
+          Write-Host "  skia_arch: $env:skia_arch"
+          Write-Host "  BUILD_TYPE: ${{ env.BUILD_TYPE }}"
+          
+          Write-Host "Current directory: $(Get-Location)"
+          
+          Write-Host "Checking Skia directory..."
+          if (-not (Test-Path "skia")) {
+            Write-Error "ERROR: Skia directory not found"
+            exit 1
+          }
+          
+          Write-Host "Checking Skia library directory..."
+          $skiaLibDir = Join-Path (Get-Location) "skia\out\Release-x64"
+          if (-not (Test-Path $skiaLibDir)) {
+            Write-Error "ERROR: Skia library directory not found at $skiaLibDir"
+            exit 1
+          }
+          
+          Write-Host "Skia library directory contents:"
+          Get-ChildItem -Path $skiaLibDir -Filter "*.lib" | Format-Table Name
+          
+          Write-Host "Running CMake..."
           cmake -S . -B build -G Ninja `
             -DCMAKE_BUILD_TYPE="${{ env.BUILD_TYPE }}" `
             -DENABLE_TESTS=OFF `
@@ -147,31 +278,139 @@ jobs:
             -DSKIA_DIR="$((Get-Location).Path)\skia" `
             -DSKIA_LIBRARY_DIR="$((Get-Location).Path)\skia\out\Release-x64" `
             -DOPENSSL_USE_STATIC_LIBS=ON
+          
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "ERROR: CMake failed with exit code $LASTEXITCODE"
+            exit 1
+          }
+          
+          Write-Host "Build directory contents:"
+          Get-ChildItem -Path build -Force | Format-Table Name, Mode
+          
+          Write-Host "=== Makefiles generation completed ===" -ForegroundColor Cyan
 
       - name: Compiling
         shell: pwsh
         working-directory: aseprite
         run: |
+          Write-Host "=== Starting compilation ===" -ForegroundColor Cyan
+          
+          if (-not (Test-Path "build")) {
+            Write-Error "ERROR: Build directory not found"
+            exit 1
+          }
+          
           cd build
+          Write-Host "Current directory: $(Get-Location)"
+          
+          Write-Host "Build directory contents:"
+          Get-ChildItem -Path . -Force | Format-Table Name, Mode
+          
+          Write-Host "Starting Ninja build..."
           ninja
+          
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "ERROR: Ninja build failed with exit code $LASTEXITCODE"
+            
+            # Check if there are any error logs
+            if (Test-Path "CMakeFiles\CMakeError.log") {
+              Write-Host "CMakeError.log contents:"
+              Get-Content "CMakeFiles\CMakeError.log"
+            }
+            
+            if (Test-Path "CMakeFiles\CMakeOutput.log") {
+              Write-Host "CMakeOutput.log contents:"
+              Get-Content "CMakeFiles\CMakeOutput.log"
+            }
+            
+            exit 1
+          }
+          
+          Write-Host "=== Compilation completed ===" -ForegroundColor Cyan
+
+      - name: Verify build output
+        shell: pwsh
+        working-directory: aseprite
+        run: |
+          Write-Host "=== Verifying build output ===" -ForegroundColor Cyan
+          
+          $binDir = Join-Path (Get-Location) "build\bin"
+          
+          if (-not (Test-Path $binDir)) {
+            Write-Error "ERROR: Bin directory not found at $binDir"
+            exit 1
+          }
+          
+          Write-Host "Bin directory contents:"
+          Get-ChildItem -Path $binDir -Recurse | Format-Table FullName, Length
+          
+          $exePath = Join-Path $binDir "aseprite.exe"
+          
+          if (-not (Test-Path $exePath)) {
+            Write-Error "ERROR: Aseprite executable not found at $exePath"
+            exit 1
+          }
+          
+          $exeSize = (Get-Item $exePath).Length / 1MB
+          Write-Host "Found Aseprite executable: $exePath (size: $exeSize MB)" -ForegroundColor Green
+          
+          Write-Host "=== Build output verification completed ===" -ForegroundColor Cyan
 
       - name: Clean Up Build folder
         working-directory: aseprite/build/bin
         shell: pwsh
         run: |
+          Write-Host "=== Cleaning up build folder ===" -ForegroundColor Cyan
+          
+          Write-Host "Before cleanup:"
+          Get-ChildItem -Path . -Recurse | Format-Table Name, Mode
+          
           Get-ChildItem -Path . -Recurse | Where-Object { $_.Name -notin @('aseprite.exe', 'data') } | Remove-Item -Recurse -Force
+          
+          Write-Host "After cleanup:"
+          Get-ChildItem -Path . -Recurse | Format-Table Name, Mode
+          
+          Write-Host "=== Cleanup completed ===" -ForegroundColor Cyan
 
       - name: Make portable zip
         working-directory: aseprite/build/bin
         shell: pwsh
         run: |
+          Write-Host "=== Creating portable zip ===" -ForegroundColor Cyan
+          
           "This file is here so Aseprite behaves as a portable program" | Out-File -FilePath "aseprite.ini" -Encoding utf8
+          
+          if (-not (Test-Path "aseprite.ini")) {
+            Write-Error "ERROR: Failed to create aseprite.ini"
+            exit 1
+          }
+          
+          Write-Host "Created aseprite.ini" -ForegroundColor Green
+          
+          Write-Host "=== Portable zip preparation completed ===" -ForegroundColor Cyan
 
       - name: Create release zip
         working-directory: aseprite/build/bin
         shell: pwsh
         run: |
-          Compress-Archive -Path * -DestinationPath "Aseprite-${{ needs.create-release.outputs.release-tag }}-Windows.zip" -Force
+          Write-Host "=== Creating release zip ===" -ForegroundColor Cyan
+          
+          $releaseTag = "${{ needs.create-release.outputs.release-tag }}"
+          $zipName = "Aseprite-${releaseTag}-Windows.zip"
+          
+          Write-Host "Creating zip file: $zipName"
+          
+          Compress-Archive -Path * -DestinationPath $zipName -Force
+          
+          if (-not (Test-Path $zipName)) {
+            Write-Error "ERROR: Failed to create zip file"
+            exit 1
+          }
+          
+          $zipSize = (Get-Item $zipName).Length / 1MB
+          Write-Host "Created zip file: $zipName (size: $zipSize MB)" -ForegroundColor Green
+          
+          Write-Host "=== Release zip creation completed ===" -ForegroundColor Cyan
 
       - name: Upload release
         uses: svenstaro/upload-release-action@v2
@@ -180,3 +419,12 @@ jobs:
           file: aseprite/build/bin/Aseprite-${{ needs.create-release.outputs.release-tag }}-Windows.zip
           asset_name: Aseprite-${{ needs.create-release.outputs.release-tag }}-Windows.zip
           tag: ${{ needs.create-release.outputs.release-tag }}
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            aseprite/build/CMakeFiles/CMakeError.log
+            aseprite/build/CMakeFiles/CMakeOutput.log
