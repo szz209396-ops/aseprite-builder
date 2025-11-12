@@ -49,21 +49,16 @@ jobs:
     needs: create-release
     permissions:
       contents: write
-    runs-on: ${{ matrix.os }}
-    strategy:
-        matrix:
-          os: [ windows-latest ]
-        fail-fast: false
+    runs-on: windows-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Visual Studio environment
-        uses: seanmiddleditch/gha-setup-vsdevenv@master
+      - name: Setup Visual Studio Build Tools
+        uses: ilammy/msvc-dev-cmd@v1
         with:
-          arch: amd64
-          winsdk: 10.0.26100.0
-          components: Microsoft.VisualStudio.Component.VC.Tools.x86.x64;Microsoft.VisualStudio.Component.Windows10SDK.19041
+          arch: x64
+          toolset: 14.39
 
       - name: Install Ninja
         uses: aseprite/get-ninja@main
@@ -124,12 +119,12 @@ jobs:
         working-directory: aseprite/build/bin
         shell: pwsh
         run: |
-          Compress-Archive -Path * -DestinationPath "Aseprite-${{ needs.create-release.outputs.release-tag }}-${{ runner.os }}.zip" -Force
+          Compress-Archive -Path * -DestinationPath "Aseprite-${{ needs.create-release.outputs.release-tag }}-Windows.zip" -Force
 
       - name: Upload release
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: aseprite/build/bin/Aseprite-${{ needs.create-release.outputs.release-tag }}-${{ runner.os }}.zip
-          asset_name: Aseprite-${{ needs.create-release.outputs.release-tag }}-${{ runner.os }}.zip
+          file: aseprite/build/bin/Aseprite-${{ needs.create-release.outputs.release-tag }}-Windows.zip
+          asset_name: Aseprite-${{ needs.create-release.outputs.release-tag }}-Windows.zip
           tag: ${{ needs.create-release.outputs.release-tag }}
