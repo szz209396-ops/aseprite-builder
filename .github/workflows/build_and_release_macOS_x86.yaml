@@ -54,11 +54,63 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Visual Studio Build Tools
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
-          toolset: 14.39
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Setup Visual Studio environment manually
+        shell: pwsh
+        run: |
+          # Find Visual Studio installation path using vswhere
+          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
+            -latest `
+            -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath
+          
+          if (-not $vsPath) {
+            Write-Error "Visual Studio installation not found"
+            exit 1
+          }
+          
+          Write-Host "Found Visual Studio at: $vsPath"
+          
+          # Locate vcvars64.bat
+          $vcVarsPath = Join-Path $vsPath "VC\Auxiliary\Build\vcvars64.bat"
+          
+          if (-not (Test-Path $vcVarsPath)) {
+            Write-Error "vcvars64.bat not found at $vcVarsPath"
+            exit 1
+          }
+          
+          Write-Host "Found vcvars64.bat at: $vcVarsPath"
+          
+          # Capture environment variables from vcvars64.bat
+          $envOutput = cmd /c " `"$vcVarsPath`" && set"
+          
+          # Parse and set environment variables
+          foreach ($line in $envOutput) {
+            if ($line -match '^([^=]+)=(.*)$') {
+              $key = $matches[1]
+              $value = $matches[2]
+              
+              # Skip empty values
+              if ([string]::IsNullOrEmpty($value)) {
+                continue
+              }
+              
+              # Handle PATH specially to avoid duplication
+              if ($key -eq 'PATH') {
+                # Prepend to PATH
+                $newPath = "$value;$env:PATH"
+                [Environment]::SetEnvironmentVariable($key, $newPath, 'Process')
+              } else {
+                # Set other environment variables
+                [Environment]::SetEnvironmentVariable($key, $value, 'Process')
+              }
+            }
+          }
+          
+          Write-Host "Successfully set up Visual Studio environment"
 
       - name: Install Ninja
         uses: aseprite/get-ninja@main
